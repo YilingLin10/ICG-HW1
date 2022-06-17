@@ -1,0 +1,2103 @@
+<html>
+
+<head>
+    <style>
+        .column {
+            float: left;
+            width: 33.33%;
+        }
+
+        /* Clear floats after the columns */
+        .row:after {
+            content: "";
+            display: table;
+            clear: both;
+        }
+        /* toggle in label designing */
+        .toggle {
+            position : relative ;
+            display : inline-block;
+            width : 25px;
+            height : 17px;
+            background-color: yellow;
+            border-radius: 30px;
+            border: 2px solid gray;
+        }
+                
+        /* After slide changes */
+        .toggle:after {
+            content: '';
+            position: absolute;
+            width: 15px;
+            height: 15px;
+            border-radius: 50%;
+            background-color: gray;
+            top: 1px; 
+            left: 1px;
+            transition:  all 0.5s;
+        }
+                
+        /* Checkbox checked effect */
+        .checkbox:checked + .toggle::after {
+            left : 9px; 
+        }
+                
+        /* Checkbox checked toggle label bg color */
+        .checkbox:checked + .toggle {
+            background-color: white;
+        }
+                
+        /* Checkbox vanished */
+        .checkbox { 
+            display : none;
+        }
+    </style>
+<title>ICG WebGL &mdash; HW1</title>
+<meta http-equiv="content-type" content="text/html; charset=ISO-8859-1">
+
+<script type="text/javascript" src="./js/glMatrix-0.9.5.min.js"></script>
+<script type="text/javascript" src="./js/webgl-utils.js"></script>
+
+<!-- 
+    TODO HERE: 
+    modify fragment shader or write another one
+    to implement flat, gouraud and phong shading
+ -->
+<!-- Cartoon-->
+<script id="cartoonVertexShader" type="vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aVertexNormal;
+
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+    uniform mat4 uNMatrix;
+
+	varying vec3 fragPos;
+    varying vec3 normal;
+
+    void main(void) {
+        fragPos = (uMVMatrix * vec4(aVertexPosition, 1.0)).xyz;
+        normal = normalize(vec3(uNMatrix * vec4(aVertexNormal, 1.0)));
+        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+    }
+</script>
+<script id="cartoonFragmentShader" type="fragment">
+    precision mediump float;
+
+    struct Light {
+        bool on;
+        vec3 position;
+        vec3 color;
+        vec4 ka;
+        vec4 kd;
+        vec4 ks;
+        float shininess;
+    };
+    uniform Light uLights[3];
+
+    varying vec3 fragPos;
+    varying vec3 normal;
+
+    void main(void) {
+        vec3 N = normal;
+        vec3 L = normalize(uLights[0].position - fragPos);
+        vec3 E = normalize(-fragPos);
+
+        float lambert = dot(N, L);
+
+        if (lambert > 0.9) {
+            lambert = 1.0;
+        }else if (lambert > 0.5) {
+            lambert = 0.7;
+        }else if (lambert > 0.1) {
+            lambert = 0.5;
+        }else {
+            lambert = 0.2;
+        }
+
+        vec3 color = vec3(0.0, lambert, 1.0);
+        gl_FragColor = vec4(color, 1.0);
+    }
+</script>
+<!-- Bump -->
+<script id="bumpVertexShader" type="vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aFrontColor;
+    attribute vec3 aVertexNormal;
+    attribute vec2 aVertexTextureCoord;
+
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+    uniform mat4 uNMatrix;
+
+	varying vec2 texCoord;
+    varying vec3 fragPos;
+    varying vec3 normal;
+    varying vec4 objectColor;
+
+    void main(void) {
+        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+        texCoord = aVertexTextureCoord;
+        fragPos = (uMVMatrix * vec4(aVertexPosition, 1.0)).xyz;
+        normal = normalize(vec3(uNMatrix * vec4(aVertexNormal, 1.0)));
+        objectColor = vec4(aFrontColor.rgb, 1.0);
+    }
+</script>
+<script id="bumpFragmentShader" type="fragment">
+    #extension GL_OES_standard_derivatives : enable
+    precision mediump float;
+
+    uniform sampler2D uSampler;
+    varying vec2 texCoord;
+
+    varying vec3 fragPos;
+    varying vec3 normal;
+    varying vec4 objectColor;
+
+    struct Light {
+        bool on;
+        vec3 position;
+        vec3 color;
+        vec4 ka;
+        vec4 kd;
+        vec4 ks;
+        float shininess;
+    };
+    uniform Light uLights[3];
+
+    mat3 calculateTBN(vec3 N, vec3 fragPos, vec2 texCoord) {
+        vec3 dp1 = dFdx(fragPos);
+        vec3 dp2 = dFdy(fragPos);
+        vec2 dt1 = dFdx(texCoord);
+        vec2 dt2 = dFdy(texCoord);
+
+        vec3 dp1_N = cross(dp1, N);
+        vec3 dp2_N = cross(dp2, N);
+
+        vec3 T = dp2_N * dt1.x + dp1_N * dt2.x;
+        vec3 B = dp2_N * dt1.y + dp1_N * dt2.y;
+
+        float s = inversesqrt(max(dot(T,T), dot(B,B)));
+        return mat3(T*s, B*s, N);
+    }
+    vec3 mapNormal(vec3 N, vec3 E, vec2 texCoord) {
+        vec3 texColor = texture2D(uSampler, texCoord).xyz;
+        vec3 map_normal = texColor * 2.0 - 1.0;
+        mat3 TBN = calculateTBN(N, -E, texCoord);
+        return normalize(TBN * map_normal);
+    }
+    vec4 calculateLight(Light light, vec3 fragPos, vec3 normal, vec2 texCoord) {
+        vec3 N = normal;
+        vec3 L = normalize(light.position - fragPos);
+        vec3 E = normalize(-fragPos);
+        vec3 map_normal = mapNormal(N, E, texCoord);
+        vec3 R = reflect(-L, map_normal);
+
+        float lambert = max(dot(map_normal, L), 0.0);
+
+        // ambient term
+        vec4 ambientColor = light.ka * vec4(light.color, 1.0);
+        // diffuse term
+        vec4 diffuseColor = light.kd * lambert * vec4(light.color, 1.0);
+        // specular term
+        float specular = 0.0;
+        if (lambert > 0.0) {
+            specular =  pow(max(dot(R, E), 0.0), light.shininess);
+        }
+        vec4 specularColor = light.ks * specular * vec4(light.color, 1.0);
+        return (ambientColor + diffuseColor + specularColor);
+    }
+
+    void main(void) {
+        vec4 fragColor;
+        for (int i = 0; i < 3; i++) {
+            if (uLights[i].on) {
+                fragColor += calculateLight(uLights[i], fragPos, normal, texCoord);
+            }
+        }
+        fragColor.a = 1.0;
+        gl_FragColor = fragColor * objectColor;
+    }
+</script>
+<!-- Texture-->
+<script id="textureVertexShader" type="vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aFrontColor;
+    attribute vec3 aVertexNormal;
+    attribute vec2 aVertexTextureCoord;
+
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+    uniform mat4 uNMatrix;
+
+	varying vec2 texCoord;
+    varying vec3 fragPos;
+    varying vec3 normal;
+    varying vec4 objectColor;
+
+    void main(void) {
+        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+        texCoord = aVertexTextureCoord;
+        fragPos = (uMVMatrix * vec4(aVertexPosition, 1.0)).xyz;
+        normal = normalize(vec3(uNMatrix * vec4(aVertexNormal, 1.0)));
+    }
+</script>
+<script id="textureFragmentShader" type="fragment">
+    precision mediump float;
+
+    uniform sampler2D uSampler;
+    varying vec2 texCoord;
+
+    varying vec3 fragPos;
+    varying vec3 normal;
+    varying vec4 objectColor;
+
+    struct Light {
+        bool on;
+        vec3 position;
+        vec3 color;
+        vec4 ka;
+        vec4 kd;
+        vec4 ks;
+        float shininess;
+    };
+    uniform Light uLights[3];
+
+    vec4 calculateLight(Light light, vec3 fragPos, vec3 normal) {
+        vec3 N = normal;
+        vec3 L = normalize(light.position - fragPos);
+        vec3 E = normalize(-fragPos);
+        vec3 R = reflect(-L, N);
+
+        float lambert = max(dot(N, L), 0.0);
+
+        // ambient term
+        vec4 ambientColor = light.ka * vec4(light.color, 1.0);
+        // diffuse term
+        vec4 diffuseColor = light.kd * lambert * vec4(light.color, 1.0);
+        // specular term
+        float specular = 0.0;
+        if (lambert > 0.0) {
+            specular =  pow(max(dot(R, E), 0.0), light.shininess);
+        }
+        vec4 specularColor = light.ks * specular * vec4(light.color, 1.0);
+        return (ambientColor + diffuseColor + specularColor);
+    }
+
+    void main(void) {
+        vec4 texColor = texture2D(uSampler, texCoord);
+        vec4 fragColor;
+        for (int i = 0; i < 3; i++) {
+            if (uLights[i].on) {
+                fragColor += calculateLight(uLights[i], fragPos, normal);
+            }
+        }
+        fragColor.a = 1.0;
+        gl_FragColor = fragColor * texColor;
+    }
+</script>
+
+<!-- phong shading -->
+<script id="phongVertexShader" type="vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aFrontColor;
+    attribute vec3 aVertexNormal;
+
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+    uniform mat4 uNMatrix;
+
+	varying vec3 fragPos;
+    varying vec3 normal;
+    varying vec4 objectColor;
+
+    void main(void) {
+        fragPos = (uMVMatrix * vec4(aVertexPosition, 1.0)).xyz;
+        normal = normalize(vec3(uNMatrix * vec4(aVertexNormal, 1.0)));
+        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+        objectColor = vec4(aFrontColor.rgb, 1.0);
+    }
+</script>
+<script id="phongFragmentShader" type="fragment">
+    precision mediump float;
+
+    varying vec3 fragPos;
+    varying vec3 normal;
+    varying vec4 objectColor;
+
+    struct Light {
+        bool on;
+        vec3 position;
+        vec3 color;
+        vec4 ka;
+        vec4 kd;
+        vec4 ks;
+        float shininess;
+    };
+    uniform Light uLights[3];
+
+    vec4 calculateLight(Light light, vec3 fragPos, vec3 normal) {
+        vec3 N = normal;
+        vec3 L = normalize(light.position - fragPos);
+        vec3 E = normalize(-fragPos);
+        vec3 R = reflect(-L, N);
+
+        float lambert = max(dot(N, L), 0.0);
+
+        // ambient term
+        vec4 ambientColor = light.ka * vec4(light.color, 1.0);
+        // diffuse term
+        vec4 diffuseColor = light.kd * lambert * vec4(light.color, 1.0);
+        // specular term
+        float specular = 0.0;
+        if (lambert > 0.0) {
+            specular =  pow(max(dot(R, E), 0.0), light.shininess);
+        }
+        vec4 specularColor = light.ks * specular * vec4(light.color, 1.0);
+        return (ambientColor + diffuseColor + specularColor);
+    }
+
+    void main(void) {
+        vec4 fragColor;
+        for (int i = 0; i < 3; i++) {
+            if (uLights[i].on) {
+                fragColor += calculateLight(uLights[i], fragPos, normal);
+            }
+        }
+        fragColor.a = 1.0;
+        gl_FragColor = fragColor * objectColor;
+    }
+</script>
+
+<!-- gouraud shading -->
+<script id="gouraudVertexShader" type="vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aFrontColor;
+    attribute vec3 aVertexNormal;
+
+    struct Light {
+        bool on;
+        vec3 position;
+        vec3 color;
+        vec4 ka;
+        vec4 kd;
+        vec4 ks;
+        float shininess;
+    };
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+    uniform mat4 uNMatrix;
+    uniform Light uLights[3];
+
+    varying vec4 fragColor;
+
+    vec4 calculateLight(Light light, vec3 fragPos) {
+        vec3 N = normalize(vec3(uNMatrix * vec4(aVertexNormal, 1.0)));
+        vec3 L = normalize(light.position - fragPos);
+        vec3 E = normalize(-fragPos);
+        vec3 R = reflect(-L, N);
+
+        float lambert = max(dot(N, L), 0.0);
+
+        // ambient term
+        vec4 ambientColor = light.ka * vec4(light.color, 1.0);
+        // diffuse term
+        vec4 diffuseColor = light.kd * lambert * vec4(light.color, 1.0);
+        // specular term
+        float specular = 0.0;
+        if (lambert > 0.0) {
+            specular =  pow(max(dot(R, E), 0.0), light.shininess);
+        }
+        vec4 specularColor = light.ks * specular * vec4(light.color, 1.0);
+        return (ambientColor + diffuseColor + specularColor);
+    }
+    void main(void) {
+        vec3 camPos = (uMVMatrix * vec4(aVertexPosition, 1.0)).xyz;
+        for (int i = 0; i < 3; i++) {
+            if (uLights[i].on) {
+                fragColor += calculateLight(uLights[i], camPos);
+            }
+        }
+        fragColor.a = 1.0;
+        fragColor = fragColor * vec4(aFrontColor, 1.0);
+        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+    }
+</script>
+<script id="gouraudFragmentShader" type="fragment">
+    precision mediump float;
+
+    varying vec4 fragColor;
+
+    void main(void) {
+        gl_FragColor = fragColor;
+    }
+</script>
+<!-- flat shading -->
+<script id="flatVertexShader" type="vertex">
+    attribute vec3 aVertexPosition;
+    attribute vec3 aFrontColor;
+
+    uniform mat4 uMVMatrix;
+    uniform mat4 uPMatrix;
+
+	varying vec3 fragPos;
+    varying vec4 objectColor;
+
+    void main(void) {
+        fragPos = (uMVMatrix * vec4(aVertexPosition, 1.0)).xyz;
+        gl_Position = uPMatrix * uMVMatrix * vec4(aVertexPosition, 1.0);
+        objectColor = vec4(aFrontColor, 1.0);
+    }
+</script>
+<script id="flatFragmentShader" type="fragment">
+    #extension GL_OES_standard_derivatives : enable
+    precision mediump float;
+
+    varying vec3 fragPos;
+    varying vec4 objectColor;
+    
+    struct Light {
+        bool on;
+        vec3 position;
+        vec3 color;
+        vec4 ka;
+        vec4 kd;
+        vec4 ks;
+        float shininess;
+    };
+    uniform Light uLights[3];
+
+    vec4 calculateLight(Light light, vec3 fragPos) {
+        vec3 N = normalize(cross(dFdx(fragPos), dFdy(fragPos)));
+        vec3 L = normalize(light.position - fragPos);
+        vec3 E = normalize(-fragPos);
+        vec3 R = reflect(-L, N);
+
+        float lambert = max(dot(N, L), 0.0);
+
+        // ambient term
+        vec4 ambientColor = light.ka * vec4(light.color, 1.0);
+        // diffuse term
+        vec4 diffuseColor = light.kd * lambert * vec4(light.color, 1.0);
+        // specular term
+        float specular = 0.0;
+        if (lambert > 0.0) {
+            specular =  pow(max(dot(R, E), 0.0), light.shininess);
+        }
+        vec4 specularColor = light.ks * specular * vec4(light.color, 1.0);
+        return (ambientColor + diffuseColor + specularColor);
+    }
+    void main(void) {
+        vec4 fragColor;
+        for (int i = 0; i < 3; i++) {
+            if (uLights[i].on) {
+                fragColor += calculateLight(uLights[i], fragPos);
+            }
+        }
+        fragColor.a = 1.0;
+        gl_FragColor = fragColor * objectColor;
+    }
+</script>
+<script type="text/javascript">
+    // common variables
+    var gl;
+    var shaderProgram;
+    var texture;
+    var shaderKangaroo;
+    var shaderObject;
+    var perspective = 0;
+    var cameraPosition = new Float32Array([0, 0, 0]);
+    var viewMatrix = mat4.create();
+
+    // Light source 1
+    var lightPosition = new Float32Array([1000, 0, 0]);
+    var lightColor = new Float32Array([1, 1, 1]);
+    var shininess = 5.0;
+    var kAmbient = new Float32Array([0.2, 0.2, 0.2, 1.0]);
+    var kDiffuse = new Float32Array([0.5, 0.5, 0.5, 1.0]);
+    var kSpecular = new Float32Array([1.0, 1.0, 1.0, 1.0]);
+    var on = true;
+
+    // Light source 2
+    var lightPosition2 = new Float32Array([0, 1000, 0]);
+    var lightColor2 = new Float32Array([0.5, 0, 0]);
+    var shininess2 = 5.0;
+    var kAmbient2 = new Float32Array([0.2, 0.2, 0.2, 1.0]);
+    var kDiffuse2 = new Float32Array([0.5, 0.5, 0.5, 1.0]);
+    var kSpecular2 = new Float32Array([1.0, 1.0, 1.0, 1.0]);
+    var on2 = true;
+
+    // Light source 3
+    var lightPosition3 = new Float32Array([0, 0, 1000]);
+    var lightColor3 = new Float32Array([0, 0.5, 0]);
+    var shininess3 = 5.0;
+    var kAmbient3 = new Float32Array([0.2, 0.2, 0.2, 1.0]);
+    var kDiffuse3 = new Float32Array([0.5, 0.5, 0.5, 1.0]);
+    var kSpecular3 = new Float32Array([1.0, 1.0, 1.0, 1.0]);
+    var on3 = true;
+
+    // Teapot uniform
+    var mvMatrix = mat4.create();
+    var pMatrix  = mat4.create();
+    var nMatrix = mat4.create();
+    var rotateAxis = new Float32Array([0,1,0]);
+    var translation = new Float32Array([-30, 10, -70]);
+    var scale = new Float32Array([1, 1, 1]);
+    var shearing = new Float32Array([0, 0, 0]);
+
+    var teapotVertexPositionBuffer;
+    var teapotVertexNormalBuffer;
+    var teapotVertexFrontColorBuffer;
+    var teapotVertexTextureCoordBuffer;
+
+    var teapotAngle = 180;
+    var lastTime    = 0;
+
+    // Kangaroo uniforms
+    var mvMatrix_kangaroo = mat4.create();
+    var pMatrix_kangaroo  = mat4.create();
+    var nMatrix_kangaroo = mat4.create();
+    var rotateAxis_kangaroo = new Float32Array([1,0,0]);
+    var translation_kangaroo = new Float32Array([0, 0, -2.5]);
+    var scale_kangaroo = new Float32Array([1, 1, 1]);
+    var shearing_kangaroo = new Float32Array([0, 0, 0]);
+    var kangarooVertexPositionBuffer;
+    var kangarooVertexNormalBuffer;
+    var kangarooVertexFrontColorBuffer;
+    var kangarooAngle = 180;
+    
+    // Object3 uniforms
+    var mvMatrix_obj = mat4.create();
+    var pMatrix_obj  = mat4.create();
+    var nMatrix_obj = mat4.create();
+    var rotateAxis_obj = new Float32Array([0,0,1]);
+    var translation_obj = new Float32Array([10, 0, -30]);
+    var scale_obj = new Float32Array([1, 1, 1]);
+    var shearing_obj = new Float32Array([0, 0, 0]);
+    var objVertexPositionBuffer;
+    var objVertexNormalBuffer;
+    var objVertexFrontColorBuffer;
+    var objAngle = 30;
+
+
+    function initGL(canvas) {
+        try {
+            gl = canvas.getContext("webgl") || canvas.getContext("experimental-webgl");
+            gl.viewportWidth  = canvas.width;
+            gl.viewportHeight = canvas.height;
+        } 
+        catch (e) {
+        }
+
+        if (!gl) {
+            alert("Could not initialise WebGL, sorry :-(");
+        }
+        if (!gl.getExtension("OES_standard_derivatives")) {
+            throw 'extension not support';
+        }
+    }
+
+    function initTexture() {
+        texture = gl.createTexture();
+        var image = new Image();
+        image.onload = function() {loadTexture(image);};
+        image.src = './bump.png';
+    }
+
+    function loadTexture(image) {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, 1);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, image);
+    }
+
+    function getShader(gl, id) {
+        var shaderScript = document.getElementById(id);
+        if (!shaderScript) {
+            return null;
+        }
+
+        var shaderSource = "";
+        var k = shaderScript.firstChild;
+        while (k) {
+            if (k.nodeType == 3) {
+                shaderSource += k.textContent;
+            }
+
+            k = k.nextSibling;
+        }
+
+        var shader;
+        if (shaderScript.type == "fragment") {
+            shader = gl.createShader(gl.FRAGMENT_SHADER);
+        } 
+        else if (shaderScript.type == "vertex") {
+            shader = gl.createShader(gl.VERTEX_SHADER);
+        } 
+        else {
+            return null;
+        }
+
+        gl.shaderSource(shader, shaderSource);
+        gl.compileShader(shader);
+
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+            alert(gl.getShaderInfoLog(shader));
+            return null;
+        }
+
+        return shader;
+    }
+
+    function initShaders() {
+        var fragmentShader = getShader(gl, "phongFragmentShader");
+        var vertexShader   = getShader(gl, "phongVertexShader");
+
+        shaderProgram = gl.createProgram();
+        gl.attachShader(shaderProgram, vertexShader);
+        gl.attachShader(shaderProgram, fragmentShader);
+        gl.linkProgram(shaderProgram);
+
+        if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+            alert("Could not initialise shaders");
+        }
+    }
+
+    function initKangarooShader() {
+        var fragmentShader = getShader(gl, "flatFragmentShader");
+        var vertexShader   = getShader(gl, "flatVertexShader");
+
+        shaderKangaroo = gl.createProgram();
+        gl.attachShader(shaderKangaroo, vertexShader);
+        gl.attachShader(shaderKangaroo, fragmentShader);
+        gl.linkProgram(shaderKangaroo);
+
+        if (!gl.getProgramParameter(shaderKangaroo, gl.LINK_STATUS)) {
+            alert("Could not initialise shaders");
+        }
+    }
+
+    function initObjectShader() {
+        var fragmentShader = getShader(gl, "gouraudFragmentShader");
+        var vertexShader   = getShader(gl, "gouraudVertexShader");
+
+        shaderObject = gl.createProgram();
+        gl.attachShader(shaderObject, vertexShader);
+        gl.attachShader(shaderObject, fragmentShader);
+        gl.linkProgram(shaderObject);
+
+        if (!gl.getProgramParameter(shaderObject, gl.LINK_STATUS)) {
+            alert("Could not initialise shaders");
+        }
+    }
+
+    function setMatrixUniforms() {
+        gl.uniformMatrix4fv(shaderProgram.pMatrixUniform, false, pMatrix);
+        gl.uniformMatrix4fv(shaderProgram.mvMatrixUniform, false, mvMatrix);
+        gl.uniformMatrix4fv(shaderProgram.nMatrixUniform, false, nMatrix);
+    }
+
+    function setKangarooUniforms() {
+        gl.uniformMatrix4fv(shaderKangaroo.pMatrixUniform, false, pMatrix_kangaroo);
+        gl.uniformMatrix4fv(shaderKangaroo.mvMatrixUniform, false, mvMatrix_kangaroo);
+        gl.uniformMatrix4fv(shaderKangaroo.nMatrixUniform, false, nMatrix_kangaroo);
+    }
+    function setObjectUniforms() {
+        gl.uniformMatrix4fv(shaderObject.pMatrixUniform, false, pMatrix_obj);
+        gl.uniformMatrix4fv(shaderObject.mvMatrixUniform, false, mvMatrix_obj);
+        gl.uniformMatrix4fv(shaderObject.nMatrixUniform, false, nMatrix_obj);
+    }
+    function setLightingUniforms(shader) {
+        // Light 1
+        gl.uniform3fv(shader.lUniform1_position, lightPosition);
+        gl.uniform3fv(shader.lUniform1_color, lightColor);
+        gl.uniform4fv(shader.lUniform1_ka, kAmbient);
+        gl.uniform4fv(shader.lUniform1_kd, kDiffuse);
+        gl.uniform4fv(shader.lUniform1_ks, kSpecular);
+        gl.uniform1f(shader.lUniform1_shininess, shininess);
+        gl.uniform1i(shader.lUniform1_on, on);
+        // Light 2
+        gl.uniform3fv(shader.lUniform2_position, lightPosition2);
+        gl.uniform3fv(shader.lUniform2_color, lightColor2);
+        gl.uniform4fv(shader.lUniform2_ka, kAmbient2);
+        gl.uniform4fv(shader.lUniform2_kd, kDiffuse2);
+        gl.uniform4fv(shader.lUniform2_ks, kSpecular2);
+        gl.uniform1f(shader.lUniform2_shininess, shininess2);
+        gl.uniform1i(shader.lUniform2_on, on2);
+        // Light 3
+        gl.uniform3fv(shader.lUniform3_position, lightPosition3);
+        gl.uniform3fv(shader.lUniform3_color, lightColor3);
+        gl.uniform4fv(shader.lUniform3_ka, kAmbient3);
+        gl.uniform4fv(shader.lUniform3_kd, kDiffuse3);
+        gl.uniform4fv(shader.lUniform3_ks, kSpecular3);
+        gl.uniform1f(shader.lUniform3_shininess, shininess3);
+        gl.uniform1i(shader.lUniform3_on, on3);
+    }
+    function degToRad(degrees) {
+        return degrees * Math.PI / 180;
+    }
+
+    function handleLoadedTeapot(teapotData) {
+        teapotVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexPositionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(teapotData.vertexPositions), gl.STATIC_DRAW);
+        teapotVertexPositionBuffer.itemSize = 3;
+        teapotVertexPositionBuffer.numItems = teapotData.vertexPositions.length / 3;
+
+        teapotVertexNormalBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexNormalBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(teapotData.vertexNormals), gl.STATIC_DRAW);
+        teapotVertexNormalBuffer.itemSize = 3;
+        teapotVertexNormalBuffer.numItems = teapotData.vertexNormals.length / 3;
+
+        teapotVertexFrontColorBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexFrontColorBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(teapotData.vertexFrontcolors), gl.STATIC_DRAW);
+        teapotVertexFrontColorBuffer.itemSize = 3;
+        teapotVertexFrontColorBuffer.numItems = teapotData.vertexFrontcolors.length / 3;
+        
+        teapotVertexTextureCoordBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexTextureCoordBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(teapotData.vertexTextureCoords), gl.STATIC_DRAW);
+        teapotVertexTextureCoordBuffer.itemSize = 2;
+        teapotVertexTextureCoordBuffer.numItems = teapotData.vertexTextureCoords.length / 2;
+    }
+    function handleLoadedKangaroo(kangarooData) {
+        kangarooVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, kangarooVertexPositionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(kangarooData.vertexPositions), gl.STATIC_DRAW);
+        kangarooVertexPositionBuffer.itemSize = 3;
+        kangarooVertexPositionBuffer.numItems = kangarooData.vertexPositions.length / 3;
+
+        kangarooVertexNormalBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, kangarooVertexNormalBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(kangarooData.vertexNormals), gl.STATIC_DRAW);
+        kangarooVertexNormalBuffer.itemSize = 3;
+        kangarooVertexNormalBuffer.numItems = kangarooData.vertexNormals.length / 3;
+
+        kangarooVertexFrontColorBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, kangarooVertexFrontColorBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(kangarooData.vertexFrontcolors), gl.STATIC_DRAW);
+        kangarooVertexFrontColorBuffer.itemSize = 3;
+        kangarooVertexFrontColorBuffer.numItems = kangarooData.vertexFrontcolors.length / 3;
+    }
+    function handleLoadedObject(objectData) {
+        objVertexPositionBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, objVertexPositionBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(objectData.vertexPositions), gl.STATIC_DRAW);
+        objVertexPositionBuffer.itemSize = 3;
+        objVertexPositionBuffer.numItems = objectData.vertexPositions.length / 3;
+
+        objVertexNormalBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, objVertexNormalBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(objectData.vertexNormals), gl.STATIC_DRAW);
+        objVertexNormalBuffer.itemSize = 3;
+        objVertexNormalBuffer.numItems = objectData.vertexNormals.length / 3;
+
+        objVertexFrontColorBuffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, objVertexFrontColorBuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(objectData.vertexFrontcolors), gl.STATIC_DRAW);
+        objVertexFrontColorBuffer.itemSize = 3;
+        objVertexFrontColorBuffer.numItems = objectData.vertexFrontcolors.length / 3;
+    }
+
+    function loadTeapot() {
+        var request = new XMLHttpRequest();
+        request.open("GET", "./model/Teapot.json");
+        request.onreadystatechange = function () {
+            if (request.readyState == 4) {
+                handleLoadedTeapot(JSON.parse(request.responseText));
+            }
+        }
+        request.send();
+    }
+    function loadKangaroo() {
+        var request = new XMLHttpRequest();
+        request.open("GET", "./model/Easter.json");
+        request.onreadystatechange = function () {
+            if (request.readyState == 4) {
+                handleLoadedKangaroo(JSON.parse(request.responseText));
+            }
+        }
+        request.send();
+    }
+    function loadObject() {
+        var request = new XMLHttpRequest();
+        // request.open("GET", "./model/Car_road.json");
+        request.open("GET", "./model/male.json");
+        request.onreadystatechange = function () {
+            if (request.readyState == 4) {
+                handleLoadedObject(JSON.parse(request.responseText));
+            }
+        }
+        request.send();
+    }
+    /*
+        TODO HERE:
+        add two or more objects showing on the canvas
+        (it needs at least three objects showing at the same time)
+    */
+    function center() {
+        return [(translation[0] + translation_kangaroo[0] + translation_obj[0])/3,
+        (translation[1] + translation_kangaroo[1] + translation_obj[1])/3,
+        (translation[2] + translation_kangaroo[2] + translation_obj[2])/3];
+    }
+    const c = center();
+    function drawScene() {
+        gl.viewport(0, 0, gl.viewportWidth, gl.viewportHeight);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+
+        //==================== Set up view matrix =================//
+        if (perspective == 0) {
+            // mat4.identity(viewMatrix);
+            // mat4.translate(viewMatrix, cameraPosition);
+            // mat4.inverse(viewMatrix, viewMatrix);
+            mat4.identity(viewMatrix);
+            mat4.lookAt([0,0,0], [0, 0, 0],  [0,1,0], viewMatrix);
+        }else 
+        if (perspective == 1) {
+            mat4.identity(viewMatrix);
+            mat4.lookAt([-70, c[1], c[2]], [1000, c[1], c[2]], [0, 1, 0], viewMatrix);
+        }
+        //==================== Draw Teapot ========================//
+        gl.useProgram(shaderProgram);
+        bindAttributes(shaderProgram);
+        var teapot_shader = document.getElementById("shading");
+        if (teapot_shader.value == "texture" || teapot_shader.value == "bump") {
+            // initTexture();
+            // bind and set Texture attributes
+            gl.activeTexture(gl.TEXTURE0);
+            gl.bindTexture(gl.TEXTURE_2D, texture);
+            shaderProgram.samplerUniform = gl.getUniformLocation(shaderProgram, "uSampler");
+            gl.uniform1i(shaderProgram.samplerUniform, 0);
+            shaderProgram.vertexTextureAttribute = gl.getAttribLocation(shaderProgram, "aVertexTextureCoord");
+            gl.enableVertexAttribArray(shaderProgram.vertexTextureAttribute);
+            if (teapotVertexTextureCoordBuffer == null) {
+                return;
+            }
+            gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexTextureCoordBuffer);
+            gl.vertexAttribPointer(shaderProgram.vertexTextureAttribute,
+                                    teapotVertexTextureCoordBuffer.itemSize, 
+                                    gl.FLOAT,
+                                    false,
+                                    0, 
+                                    0);
+        }
+        
+        if (teapotVertexPositionBuffer   == null || 
+            teapotVertexNormalBuffer     == null || 
+            teapotVertexFrontColorBuffer == null) {
+            return;
+        }
+        // Setup Projection Matrix
+        mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix);
+        // Setup Model-View Matrix (越下面的越先，越右邊的越先)
+        mat4.identity(mvMatrix);
+        // 最後承上 viewMatrix
+        mat4.multiply(mvMatrix, viewMatrix, mvMatrix);
+        mat4.translate(mvMatrix, translation);
+        mat4.rotate(mvMatrix, degToRad(teapotAngle), rotateAxis);
+        mat4.scale(mvMatrix, scale);
+        // Shearing
+        var shearX = mat4.create();
+        mat4.set(shearingX(shearing[1], shearing[2]), shearX);
+        
+        var shearY = mat4.create();
+        mat4.set(shearingY(shearing[0], shearing[2]), shearY);
+        
+        var shearZ = mat4.create();
+        mat4.set(shearingZ(shearing[0], shearing[1]), shearZ);
+        
+        // mat.multiply(c,a,b)--> b 先 a 後 
+        mat4.multiply(mvMatrix, shearX, mvMatrix);
+        mat4.multiply(mvMatrix, shearY, mvMatrix);
+        mat4.multiply(mvMatrix, shearZ, mvMatrix);
+
+        // Setup Normal Matrix
+        mat4.set(mvMatrix, nMatrix);
+        mat4.inverse(nMatrix);
+        mat4.transpose(nMatrix);
+        setMatrixUniforms();
+        setLightingUniforms(shaderProgram);
+        // Setup teapot position data
+        gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexPositionBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexPositionAttribute, 
+                               teapotVertexPositionBuffer.itemSize, 
+                               gl.FLOAT, 
+                               false, 
+                               0, 
+                               0);
+        // Setup teapot front color data
+        gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexFrontColorBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexFrontColorAttribute, 
+                               teapotVertexFrontColorBuffer.itemSize, 
+                               gl.FLOAT, 
+                               false, 
+                               0, 
+                               0);
+        // Setup teapot vertex normals data
+        gl.bindBuffer(gl.ARRAY_BUFFER, teapotVertexNormalBuffer);
+        gl.vertexAttribPointer(shaderProgram.vertexNormalAttribute, 
+                               teapotVertexNormalBuffer.itemSize, 
+                               gl.FLOAT, 
+                               false, 
+                               0, 
+                               0);
+        gl.drawArrays(gl.TRIANGLES, 0, teapotVertexPositionBuffer.numItems);
+
+        //==================== Draw Kangaroo ========================//
+        gl.useProgram(shaderKangaroo);
+        bindAttributes(shaderKangaroo);
+
+        if (kangarooVertexPositionBuffer   == null || 
+            kangarooVertexNormalBuffer     == null || 
+            kangarooVertexFrontColorBuffer == null) {
+            
+            return;
+        }
+
+        // Setup Projection Matrix
+        mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix_kangaroo);
+        // Setup Model-View Matrix
+        mat4.identity(mvMatrix_kangaroo);
+        mat4.multiply(mvMatrix_kangaroo, viewMatrix, mvMatrix_kangaroo);
+        mat4.translate(mvMatrix_kangaroo, translation_kangaroo);
+        mat4.rotate(mvMatrix_kangaroo, degToRad(kangarooAngle), rotateAxis_kangaroo);
+        mat4.scale(mvMatrix_kangaroo, scale_kangaroo);
+        // Shearing
+        var shearX_kangaroo = mat4.create();
+        mat4.set(shearingX(shearing_kangaroo[1], shearing_kangaroo[2]), shearX_kangaroo);
+        mat4.multiply(mvMatrix_kangaroo, shearX_kangaroo, mvMatrix_kangaroo);
+        var shearY_kangaroo = mat4.create();
+        mat4.set(shearingY(shearing_kangaroo[0], shearing_kangaroo[2]), shearY_kangaroo);
+        mat4.multiply(mvMatrix_kangaroo, shearY_kangaroo, mvMatrix_kangaroo);
+        var shearZ_kangaroo = mat4.create();
+        mat4.set(shearingZ(shearing_kangaroo[0], shearing_kangaroo[1]), shearZ_kangaroo);
+        mat4.multiply(mvMatrix_kangaroo, shearZ_kangaroo, mvMatrix_kangaroo);
+        // Setup Normal Matrix
+        mat4.set(mvMatrix_kangaroo, nMatrix_kangaroo);
+        mat4.inverse(nMatrix_kangaroo);
+        mat4.transpose(nMatrix_kangaroo);
+        setKangarooUniforms();
+        setLightingUniforms(shaderKangaroo);
+        // Setup kangaroo position data
+        gl.bindBuffer(gl.ARRAY_BUFFER, kangarooVertexPositionBuffer);
+        gl.vertexAttribPointer(shaderKangaroo.vertexPositionAttribute, 
+                               kangarooVertexPositionBuffer.itemSize, 
+                               gl.FLOAT, 
+                               false, 
+                               0, 
+                               0);
+        // Setup kangaroo front color data
+        gl.bindBuffer(gl.ARRAY_BUFFER, kangarooVertexFrontColorBuffer);
+        gl.vertexAttribPointer(shaderKangaroo.vertexFrontColorAttribute, 
+                               kangarooVertexFrontColorBuffer.itemSize, 
+                               gl.FLOAT, 
+                               false, 
+                               0, 
+                               0);
+        // Setup kangaroo vertex normals data
+        gl.bindBuffer(gl.ARRAY_BUFFER, kangarooVertexNormalBuffer);
+        gl.vertexAttribPointer(shaderKangaroo.vertexNormalAttribute, 
+                               kangarooVertexNormalBuffer.itemSize, 
+                               gl.FLOAT, 
+                               false, 
+                               0, 
+                               0);
+        gl.drawArrays(gl.TRIANGLES, 0, kangarooVertexPositionBuffer.numItems);
+        //==================== Draw Object ========================//
+        gl.useProgram(shaderObject);
+        bindAttributes(shaderObject);
+        if (objVertexPositionBuffer   == null || 
+            objVertexNormalBuffer     == null || 
+            objVertexFrontColorBuffer == null) {
+            
+            return;
+        }
+        // Setup Projection Matrix
+        mat4.perspective(45, gl.viewportWidth / gl.viewportHeight, 0.1, 100.0, pMatrix_obj);
+
+        // Setup Model-View Matrix
+        mat4.identity(mvMatrix_obj);
+        mat4.multiply(mvMatrix_obj, viewMatrix, mvMatrix_obj);
+        mat4.translate(mvMatrix_obj, translation_obj);
+        mat4.rotate(mvMatrix_obj, degToRad(objAngle), rotateAxis_obj);
+        mat4.scale(mvMatrix_obj, scale_obj);
+        // Shearing
+        var shearX_obj = mat4.create();
+        mat4.set(shearingX(shearing_obj[1], shearing_obj[2]), shearX_obj);
+        var shearY_obj = mat4.create();
+        mat4.set(shearingY(shearing_obj[0], shearing_obj[2]), shearY_obj);
+        var shearZ_obj = mat4.create();
+        mat4.set(shearingZ(shearing_obj[0], shearing_obj[1]), shearZ_obj);
+        mat4.multiply(mvMatrix_obj, shearX_obj, mvMatrix_obj);
+        mat4.multiply(mvMatrix_obj, shearY_obj, mvMatrix_obj);
+        mat4.multiply(mvMatrix_obj, shearZ_obj, mvMatrix_obj);
+        
+        // Setup Normal Matrix
+        mat4.set(mvMatrix_obj, nMatrix_obj);
+        mat4.inverse(nMatrix_obj);
+        mat4.transpose(nMatrix_obj);
+        setObjectUniforms();
+        setLightingUniforms(shaderObject);
+        // Setup object position data
+        gl.bindBuffer(gl.ARRAY_BUFFER, objVertexPositionBuffer);
+        gl.vertexAttribPointer(shaderObject.vertexPositionAttribute, 
+                               objVertexPositionBuffer.itemSize, 
+                               gl.FLOAT, 
+                               false, 
+                               0, 
+                               0);
+
+        // Setup object front color data
+        gl.bindBuffer(gl.ARRAY_BUFFER, objVertexFrontColorBuffer);
+        gl.vertexAttribPointer(shaderObject.vertexFrontColorAttribute, 
+                               objVertexFrontColorBuffer.itemSize, 
+                               gl.FLOAT, 
+                               false, 
+                               0, 
+                               0);
+        
+        // Setup object vertex normals data
+        gl.bindBuffer(gl.ARRAY_BUFFER, objVertexNormalBuffer);
+        gl.vertexAttribPointer(shaderObject.vertexNormalAttribute, 
+                               objVertexNormalBuffer.itemSize, 
+                               gl.FLOAT, 
+                               false, 
+                               0, 
+                               0);
+        gl.drawArrays(gl.TRIANGLES, 0, objVertexPositionBuffer.numItems);
+    }
+
+    function animate() {
+        var timeNow = new Date().getTime();
+        if (lastTime != 0) {
+            var elapsed = timeNow - lastTime;
+            teapotAngle += 0.03 * elapsed;
+            kangarooAngle += 0.03 * elapsed;
+            objAngle += 0.03 * elapsed;
+        }
+        
+        lastTime = timeNow;
+    }
+
+    function tick() {
+        requestAnimFrame(tick);
+        drawScene();
+        animate();
+    }
+
+    function webGLStart() {
+        var canvas = document.getElementById("ICG-canvas");
+        initGL(canvas);
+        initShaders();
+        initTexture();
+        loadTeapot();
+        initKangarooShader();
+        loadKangaroo();
+        initObjectShader();
+        loadObject();
+
+        gl.clearColor(0.0, 0.2, 0.2, 1.0);
+        gl.enable(gl.DEPTH_TEST);
+
+        tick();
+    }
+    
+    function bindAttributes(shaderProgram) {
+        shaderProgram.vertexPositionAttribute = gl.getAttribLocation(shaderProgram, "aVertexPosition");
+        gl.enableVertexAttribArray(shaderProgram.vertexPositionAttribute);
+        shaderProgram.vertexFrontColorAttribute = gl.getAttribLocation(shaderProgram, "aFrontColor");
+        gl.enableVertexAttribArray(shaderProgram.vertexFrontColorAttribute);
+
+        shaderProgram.vertexNormalAttribute = gl.getAttribLocation(shaderProgram, "aVertexNormal");
+        gl.enableVertexAttribArray(shaderProgram.vertexNormalAttribute);
+
+        shaderProgram.pMatrixUniform  = gl.getUniformLocation(shaderProgram, "uPMatrix");
+        shaderProgram.mvMatrixUniform = gl.getUniformLocation(shaderProgram, "uMVMatrix");
+        shaderProgram.nMatrixUniform = gl.getUniformLocation(shaderProgram, "uNMatrix");
+
+        shaderProgram.lUniform1_position = gl.getUniformLocation(shaderProgram, "uLights[0].position");
+        shaderProgram.lUniform1_color = gl.getUniformLocation(shaderProgram, "uLights[0].color");
+        shaderProgram.lUniform1_ka = gl.getUniformLocation(shaderProgram, "uLights[0].ka");
+        shaderProgram.lUniform1_kd = gl.getUniformLocation(shaderProgram, "uLights[0].kd");
+        shaderProgram.lUniform1_ks = gl.getUniformLocation(shaderProgram, "uLights[0].ks");
+        shaderProgram.lUniform1_shininess = gl.getUniformLocation(shaderProgram, "uLights[0].shininess");
+        shaderProgram.lUniform1_on = gl.getUniformLocation(shaderProgram, "uLights[0].on");
+
+        shaderProgram.lUniform2_position = gl.getUniformLocation(shaderProgram, "uLights[1].position");
+        shaderProgram.lUniform2_color = gl.getUniformLocation(shaderProgram, "uLights[1].color");
+        shaderProgram.lUniform2_ka = gl.getUniformLocation(shaderProgram, "uLights[1].ka");
+        shaderProgram.lUniform2_kd = gl.getUniformLocation(shaderProgram, "uLights[1].kd");
+        shaderProgram.lUniform2_ks = gl.getUniformLocation(shaderProgram, "uLights[1].ks");
+        shaderProgram.lUniform2_shininess = gl.getUniformLocation(shaderProgram, "uLights[1].shininess");
+        shaderProgram.lUniform2_on = gl.getUniformLocation(shaderProgram, "uLights[1].on");
+
+        shaderProgram.lUniform3_position = gl.getUniformLocation(shaderProgram, "uLights[2].position");
+        shaderProgram.lUniform3_color = gl.getUniformLocation(shaderProgram, "uLights[2].color");
+        shaderProgram.lUniform3_ka = gl.getUniformLocation(shaderProgram, "uLights[2].ka");
+        shaderProgram.lUniform3_kd = gl.getUniformLocation(shaderProgram, "uLights[2].kd");
+        shaderProgram.lUniform3_ks = gl.getUniformLocation(shaderProgram, "uLights[2].ks");
+        shaderProgram.lUniform3_shininess = gl.getUniformLocation(shaderProgram, "uLights[2].shininess");
+        shaderProgram.lUniform3_on = gl.getUniformLocation(shaderProgram, "uLights[2].on");
+    }
+
+    
+
+    function shearingX(cotY, cotZ) {
+        return [
+            1, cotY, cotZ, 0,
+            0, 1, 0, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1
+        ];
+    }
+    function shearingY(cotX, cotZ) {
+        return [
+            1, 0, 0, 0,
+            cotX, 1, cotZ, 0,
+            0, 0, 1, 0,
+            0, 0, 0, 1
+        ];
+    }
+    function shearingZ(cotX, cotY) {
+        return [
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            cotX, cotY, 1, 0,
+            0, 0, 0, 1
+        ];
+    }
+</script>
+</head>
+
+<body onload="webGLStart();">
+    <canvas id="ICG-canvas" style="border: none;" width="1280" height="720"></canvas>
+    <br/>
+    <div id="uiContainer" style="margin-top: 10px;">
+        <p style="margin: 0;">Click on the canvas to change the perspective.</p>
+        <!-- <p style="margin: 0;">Camera Position:</p>
+        <div id="camera-ui" class="row">
+            <div class="column">
+                <p>
+                    X: <span id="value-cam-x">0</span>
+                    <input id="cam-x" name="cam-x" min="-10" max="10" step="1" value="0" type="range"/>
+                </p>
+            </div>
+            <div class="column">
+                <p>
+                    Y: <span id="value-cam-y">0</span>
+                    <input id="cam-y" name="cam-y" min="-10" max="10" step="1" value="0" type="range"/>
+                </p>
+            </div>
+            <div class="column">
+                <p>
+                    Z: <span id="value-cam-z">0</span>
+                    <input id="cam-z" name="cam-z" min="-10" max="10" step="1" value="0" type="range"/>
+                </p>
+            </div>
+        </div> -->
+        <div id="object-ui" class="row">
+            <div class="column">
+                <span>Teapot</span>
+                <select name="shading" id="shading" onchange="updateShadingTeapot(this)">
+                    <option value="flat">Flat Shading</option>
+                    <option value="gouraud">Gouraud Shading</option>
+                    <option value="phong" selected>Phong Shading</option>
+                    <!-- <option value="texture">Texture</option> -->
+                    <option value="bump">Bump</option>
+                    <option value="cartoon">Cartoon Shading</option>
+                </select>
+                <br>
+                Select Rotate Axis:
+                <select name="rotate-axis" id="rotate-axis" onchange="updateRotate(this)">
+                    <option value="x">X</option>
+                    <option value="y" selected>Y</option>
+                    <option value="z">Z</option>
+                </select>
+                <br><br>
+                Translation:
+                <p>
+                    X: <span id="value-trans-x">-30</span>
+                    <input id="trans-x" name="trans-x" min="-100" max="100" value="-30" type="range"/>
+                </p>
+                <p>
+                    Y: <span id="value-trans-y">10</span>
+                    <input id="trans-y" name="trans-y" min="-100" max="100" value="10" type="range"/>
+                </p>
+                <p>
+                    Z: <span id="value-trans-z">-70</span>
+                    <input id="trans-z" name="trans-z" min="-100" max="100" value="-70" type="range"/>
+                </p>
+                <p>
+                    Scale: <span id="value-scale">1</span>
+                    <input id="scale" name="scale" min="0.1" max="3" value="1" step="0.1" type="range"/>
+                </p>
+                Shear:
+                <p>
+                    X+cot: <span id="value-shear-x">0</span>
+                    <input id="shear-x" name="shear-x" min="0" max="1" step="0.01" value="0" type="range"/>
+                </p>
+                <p>
+                    Y+cot: <span id="value-shear-y">0</span>
+                    <input id="shear-y" name="shear-y" min="0" max="1" step="0.01" value="0" type="range"/>
+                </p>
+                <p>
+                    Z+cot: <span id="value-shear-z">0</span>
+                    <input id="shear-z" name="shear-z" min="0" max="1" step="0.1" value="0" type="range"/>
+                </p>
+
+            </div>
+            <div class="column">
+                <span>Easter</span>
+                <select name="shading-kangaroo" id="shading-kangaroo" onchange="updateShadingKangaroo(this)">
+                    <option value="flat" selected>Flat Shading</option>
+                    <option value="gouraud">Gouraud Shading</option>
+                    <option value="phong">Phong Shading</option>
+                </select>
+                <br>
+                Select Rotate Axis:
+                <select name="rotate-axis2" id="rotate-axis2" onchange="updateRotate2(this)">
+                    <option value="x" selected>X</option>
+                    <option value="y">Y</option>
+                    <option value="z">Z</option>
+                </select>
+                <br><br>
+                Translation: 
+                <p>
+                    X: <span id="value-trans2-x">0</span>
+                    <input id="trans2-x" name="trans2-x" min="-10" max="10" step="0.1" value="0" type="range"/>
+                </p>
+                <p>
+                    Y: <span id="value-trans2-y">0</span>
+                    <input id="trans2-y" name="trans2-y" min="-10" max="10" step="0.1" value="0" type="range"/>
+                </p>
+                <p>
+                    Z: <span id="value-trans2-z">-2.5</span>
+                    <input id="trans2-z" name="trans2-z" min="-10" max="10" step="0.1" value="-2.5" type="range"/>
+                </p>
+                <p>
+                    Scale: <span id="value-scale2">1</span>
+                    <input id="scale2" name="scale2" min="0.1" max="3" value="1" step="0.1" type="range"/>
+                </p>
+                Shear:
+                <p>
+                    X+cot: <span id="value-shear2-x">0</span>
+                    <input id="shear2-x" name="shear2-x" min="0" max="1" step="0.01" value="0" type="range"/>
+                </p>
+                <p>
+                    Y+cot: <span id="value-shear2-y">0</span>
+                    <input id="shear2-y" name="shear2-y" min="0" max="1" step="0.01" value="0" type="range"/>
+                </p>
+                <p>
+                    Z+cot: <span id="value-shear2-z">0</span>
+                    <input id="shear2-z" name="shear2-z" min="0" max="1" step="0.1" value="0" type="range"/>
+                </p>
+            </div>
+            <div class="column">
+                <span>Male</span>
+                <select name="shading-object" id="shading-object" onchange="updateShadingObject(this)">
+                    <option value="flat">Flat Shading</option>
+                    <option value="gouraud" selected>Gouraud Shading</option>
+                    <option value="phong">Phong Shading</option>
+                </select>
+                <br>
+                Select Rotate Axis:
+                <select name="rotate-axis2" id="rotate-axis2" onchange="updateRotate3(this)">
+                    <option value="x">X</option>
+                    <option value="y">Y</option>
+                    <option value="z" selected>Z</option>
+                </select>
+                <br><br>
+                Translation:
+                <p>
+                    X: <span id="value-trans3-x">10</span>
+                    <input id="trans3-x" name="trans3-x" min="-50" max="50" step="1" value="10" type="range"/>
+                </p>
+                <p>
+                    Y: <span id="value-trans3-y">0</span>
+                    <input id="trans3-y" name="trans3-y" min="-10" max="10" step="0.1" value="0" type="range"/>
+                </p>
+                <p>
+                    Z: <span id="value-trans3-z">-40</span>
+                    <input id="trans3-z" name="trans3-z" min="-100" max="100" step="1" value="-40" type="range"/>
+                </p>
+                <p>
+                    Scale: <span id="value-scale3">1</span>
+                    <input id="scale3" name="scale3" min="0.1" max="3" value="1" step="0.1" type="range"/>
+                </p>
+                Shear:
+                <p>
+                    X+cot: <span id="value-shear3-x">0</span>
+                    <input id="shear3-x" name="shear3-x" min="0" max="1" step="0.01" value="0" type="range"/>
+                </p>
+                <p>
+                    Y+cot: <span id="value-shear3-y">0</span>
+                    <input id="shear3-y" name="shear3-y" min="0" max="1" step="0.01" value="0" type="range"/>
+                </p>
+                <p>
+                    Z+cot: <span id="value-shear3-z">0</span>
+                    <input id="shear3-z" name="shear3-z" min="0" max="1" step="0.1" value="0" type="range"/>
+                </p>
+            </div>
+            
+        </div>
+        <div id="lighting-ui" class="row">
+            <div class="column">
+                <p>
+                    Point Light 1: <input type="checkbox" id="switch-1" class="checkbox" onchange="switchLight1()"/>
+                    <label for="switch-1" class="toggle">
+                </p>
+                <p>
+                    X: <span id="value-light-x">1000</span>
+                    <input id="light-x" name="light-x" min="-1000" max="1000" value="1000" type="range"/>
+                </p>
+                <p>
+                    Y: <span id="value-light-y">0</span>
+                    <input id="light-y" name="light-y" min="-1000" max="1000" value="0" type="range"/>
+                </p>
+                <p>
+                    Z: <span id="value-light-z">0</span>
+                    <input id="light-z" name="light-z" min="-1000" max="1000" value="0" type="range"/>
+                </p>
+                <p>
+                    R: <span id="value-light-r">255</span>
+                    <input id="light-r" name="light-r" min="0" max="255" value="255" type="range"/>
+                </p>
+                <p>
+                    G: <span id="value-light-g">255</span>
+                    <input id="light-g" name="light-g" min="0" max="255" value="255" type="range"/>
+                </p>
+                <p>
+                    B: <span id="value-light-b">255</span>
+                    <input id="light-b" name="light-b" min="0" max="255" value="255" type="range"/>
+                </p>
+                <p>
+                    Shininess: <span id="value-shininess">5.0</span>
+                    <input id="light-shininess" name="light-shininess" min="1" max="128" value="5" type="range"/>
+                </p>
+                <p>
+                    ka: <span id="value-ka">0.20</span>
+                    <input id="light-ka" name="light-ka" min="0" max="1" step="0.01" value="0.20" type="range"/>
+                </p>
+                <p>
+                    kd: <span id="value-kd">0.50</span>
+                    <input id="light-kd" name="light-kd" min="0" max="1" step="0.01" value="0.50" type="range"/>
+                </p>
+                <p>
+                    ks: <span id="value-ks">1</span>
+                    <input id="light-ks" name="light-ks" min="0" max="1" step="0.01" value="1" type="range"/>
+                </p>
+            </div>
+
+            <div class="column">
+                <p>
+                    Point Light 2: <input type="checkbox" id="switch-2" class="checkbox" onchange="switchLight2()"/>
+                    <label for="switch-2" class="toggle">
+                </p>
+                <p>
+                    X: <span id="value-light2-x">0</span>
+                    <input id="light2-x" name="light2-x" min="-1000" max="1000" value="0" type="range"/>
+                </p>
+                <p>
+                    Y: <span id="value-light2-y">1000</span>
+                    <input id="light2-y" name="light2-y" min="-1000" max="1000" value="1000" type="range"/>
+                </p>
+                <p>
+                    Z: <span id="value-light2-z">0</span>
+                    <input id="light2-z" name="light2-z" min="-1000" max="1000" value="0" type="range"/>
+                </p>
+                <p>
+                    R: <span id="value-light2-r">255</span>
+                    <input id="light2-r" name="light2-r" min="0" max="255" value="255" type="range"/>
+                </p>
+                <p>
+                    G: <span id="value-light2-g">0</span>
+                    <input id="light2-g" name="light2-g" min="0" max="255" value="0" type="range"/>
+                </p>
+                <p>
+                    B: <span id="value-light2-b">0</span>
+                    <input id="light2-b" name="light2-b" min="0" max="255" value="0" type="range"/>
+                </p>
+                <p>
+                    Shininess: <span id="value-shininess2">5.0</span>
+                    <input id="light2-shininess" name="light2-shininess" min="1" max="128" value="5" type="range"/>
+                </p>
+                <p>
+                    ka: <span id="value-ka2">0.20</span>
+                    <input id="light2-ka" name="light2-ka" min="0" max="1" step="0.01" value="0.20" type="range"/>
+                </p>
+                <p>
+                    kd: <span id="value-kd2">0.50</span>
+                    <input id="light2-kd" name="light2-kd" min="0" max="1" step="0.01" value="0.50" type="range"/>
+                </p>
+                <p>
+                    ks: <span id="value-ks2">1</span>
+                    <input id="light2-ks" name="light2-ks" min="0" max="1" step="0.01" value="1" type="range"/>
+                </p>
+            </div>
+            <div class="column">
+                <p>
+                    Point Light 3: <input type="checkbox" id="switch-3" class="checkbox" onchange="switchLight3()"/>
+                    <label for="switch-3" class="toggle">
+                </p>
+                <p>
+                    X: <span id="value-light3-x">0</span>
+                    <input id="light3-x" name="light3-x" min="-1000" max="1000" value="0" type="range"/>
+                </p>
+                <p>
+                    Y: <span id="value-light3-y">0</span>
+                    <input id="light3-y" name="light3-y" min="-1000" max="1000" value="0" type="range"/>
+                </p>
+                <p>
+                    Z: <span id="value-light3-z">1000</span>
+                    <input id="light3-z" name="light3-z" min="-1000" max="1000" value="1000" type="range"/>
+                </p>
+                <p>
+                    R: <span id="value-light3-r">0</span>
+                    <input id="light3-r" name="light3-r" min="0" max="255" value="0" type="range"/>
+                </p>
+                <p>
+                    G: <span id="value-light3-g">255</span>
+                    <input id="light3-g" name="light3-g" min="0" max="255" value="255" type="range"/>
+                </p>
+                <p>
+                    B: <span id="value-light3-b">0</span>
+                    <input id="light3-b" name="light3-b" min="0" max="255" value="0" type="range"/>
+                </p>
+                <p>
+                    Shininess: <span id="value-shininess3">5.0</span>
+                    <input id="light3-shininess" name="light3-shininess" min="1" max="128" value="5" type="range"/>
+                </p>
+                <p>
+                    ka: <span id="value-ka3">0.20</span>
+                    <input id="light3-ka" name="light3-ka" min="0" max="1" step="0.01" value="0.20" type="range"/>
+                </p>
+                <p>
+                    kd: <span id="value-kd3">0.50</span>
+                    <input id="light3-kd" name="light3-kd" min="0" max="1" step="0.01" value="0.50" type="range"/>
+                </p>
+                <p>
+                    ks: <span id="value-ks3">1</span>
+                    <input id="light3-ks" name="light3-ks" min="0" max="1" step="0.01" value="1" type="range"/>
+                </p>
+            </div>
+            
+        </div>
+    </div>
+    <script>
+        //Camera Position
+        // var slider_cam_x = document.getElementById('cam-x');
+        // var slider_cam_y = document.getElementById('cam-y');
+        // var slider_cam_z = document.getElementById('cam-z');
+        // slider_cam_x.addEventListener("change", function() {updateCamPositionX();});
+        // slider_cam_y.addEventListener("change", function() {updateCamPositionY();});
+        // slider_cam_z.addEventListener("change", function() {updateCamPositionZ();});
+        // var value_cam_x = document.getElementById('value-cam-x');
+        // var value_cam_y = document.getElementById('value-cam-y');
+        // var value_cam_z = document.getElementById('value-cam-z');
+        // function updateCamPositionX() {
+        //     var x = +slider_cam_x.value;
+        //     value_cam_x.innerHTML = x;
+        //     cameraPosition[0] = x;
+        // }
+        // function updateCamPositionY() {
+        //     var y = +slider_cam_y.value;
+        //     value_cam_y.innerHTML = y;
+        //     cameraPosition[1] = y;
+        // }
+        // function updateCamPositionZ() {
+        //     var z = +slider_cam_z.value;
+        //     value_cam_z.innerHTML = z;
+        //     cameraPosition[2] = z;
+        // }
+        // Teapot Shading
+        function updateShadingTeapot(select) {
+            switch (select.value) {
+                // case 'texture':
+                //     var fragmentShader = getShader(gl, "textureFragmentShader");
+                //     var vertexShader   = getShader(gl, "textureVertexShader");
+                //     break;
+                case 'cartoon':
+                    var fragmentShader = getShader(gl, "cartoonFragmentShader");
+                    var vertexShader   = getShader(gl, "cartoonVertexShader");
+                    break;
+                case 'bump':
+                    var fragmentShader = getShader(gl, "bumpFragmentShader");
+                    var vertexShader   = getShader(gl, "bumpVertexShader");
+                    break;
+                case 'flat':
+                    var fragmentShader = getShader(gl, "flatFragmentShader");
+                    var vertexShader   = getShader(gl, "flatVertexShader");
+                    break;
+                case 'gouraud':
+                    var fragmentShader = getShader(gl, "gouraudFragmentShader");
+                    var vertexShader   = getShader(gl, "gouraudVertexShader");
+                    break;
+                case 'phong':
+                    var fragmentShader = getShader(gl, "phongFragmentShader");
+                    var vertexShader   = getShader(gl, "phongVertexShader");
+                    break;
+            }
+            shaderProgram = gl.createProgram();
+            gl.attachShader(shaderProgram, vertexShader);
+            gl.attachShader(shaderProgram, fragmentShader);
+            gl.linkProgram(shaderProgram);
+
+            if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+                alert("Could not initialise shaders");
+            }
+        }
+        // Kangaroo Shading
+        function updateShadingKangaroo(select) {
+            switch (select.value) {
+                case 'flat':
+                    var fragmentShader = getShader(gl, "flatFragmentShader");
+                    var vertexShader   = getShader(gl, "flatVertexShader");
+                    break;
+                case 'gouraud':
+                    var fragmentShader = getShader(gl, "gouraudFragmentShader");
+                    var vertexShader   = getShader(gl, "gouraudVertexShader");
+                    break;
+                case 'phong':
+                    var fragmentShader = getShader(gl, "phongFragmentShader");
+                    var vertexShader   = getShader(gl, "phongVertexShader");
+                    break;
+            }
+            shaderKangaroo = gl.createProgram();
+            gl.attachShader(shaderKangaroo, vertexShader);
+            gl.attachShader(shaderKangaroo, fragmentShader);
+            gl.linkProgram(shaderKangaroo);
+
+            if (!gl.getProgramParameter(shaderKangaroo, gl.LINK_STATUS)) {
+                alert("Could not initialise shaders");
+            }
+        }
+        // Object Shading
+        function updateShadingObject(select) {
+            switch (select.value) {
+                case 'flat':
+                    var fragmentShader = getShader(gl, "flatFragmentShader");
+                    var vertexShader   = getShader(gl, "flatVertexShader");
+                    break;
+                case 'gouraud':
+                    var fragmentShader = getShader(gl, "gouraudFragmentShader");
+                    var vertexShader   = getShader(gl, "gouraudVertexShader");
+                    break;
+                case 'phong':
+                    var fragmentShader = getShader(gl, "phongFragmentShader");
+                    var vertexShader   = getShader(gl, "phongVertexShader");
+                    break;
+            }
+            shaderObject = gl.createProgram();
+            gl.attachShader(shaderObject, vertexShader);
+            gl.attachShader(shaderObject, fragmentShader);
+            gl.linkProgram(shaderObject);
+
+            if (!gl.getProgramParameter(shaderObject, gl.LINK_STATUS)) {
+                alert("Could not initialise shaders");
+            }
+        }
+        // Position Light 1
+        var slider_light_x = document.getElementById('light-x');
+        var slider_light_y = document.getElementById('light-y');
+        var slider_light_z = document.getElementById('light-z');
+        slider_light_x.addEventListener("change", function() {updateLightPosition_x();});
+        slider_light_y.addEventListener("change", function() {updateLightPosition_y();});
+        slider_light_z.addEventListener("change", function() {updateLightPosition_z();});
+        var value_light_x = document.getElementById('value-light-x');
+        var value_light_y = document.getElementById('value-light-y');
+        var value_light_z = document.getElementById('value-light-z');
+        function updateLightPosition_x() {
+            var x = +slider_light_x.value;
+            value_light_x.innerHTML = x;
+            lightPosition[0] = x;
+        }
+        function updateLightPosition_y() {
+            var y = +slider_light_y.value;
+            value_light_y.innerHTML = y;
+            lightPosition[1] = y;
+        }
+        function updateLightPosition_z() {
+            var z = +slider_light_z.value;
+            value_light_z.innerHTML = z;
+            lightPosition[2] = z;
+        }
+        var slider_light_r = document.getElementById('light-r');
+        var slider_light_g = document.getElementById('light-g');
+        var slider_light_b = document.getElementById('light-b');
+        slider_light_r.addEventListener("change", function() {updateLightColor();});
+        slider_light_g.addEventListener("change", function() {updateLightColor();});
+        slider_light_b.addEventListener("change", function() {updateLightColor();});
+        var value_light_r = document.getElementById('value-light-r');
+        var value_light_g = document.getElementById('value-light-g');
+        var value_light_b = document.getElementById('value-light-b');
+        function updateLightColor() {
+            var r = +(slider_light_r.value / 255).toFixed(1);
+            var g = +(slider_light_g.value / 255).toFixed(1);
+            var b = +(slider_light_b.value / 255).toFixed(1);
+            value_light_r.innerHTML = slider_light_r.value ;
+            value_light_g.innerHTML = slider_light_g.value ;
+            value_light_b.innerHTML = slider_light_b.value ;
+            var color = new Float32Array([r, g, b]);
+            lightColor = color;
+        }
+        var slider_shininess = document.getElementById('light-shininess');
+        slider_shininess.addEventListener('change', function() {updateShininess();});
+        var value_shininess = document.getElementById('value-shininess');
+        function updateShininess() {
+            var lightShininess = +(slider_shininess.value);
+            value_shininess.innerHTML = lightShininess;
+            shininess = lightShininess;
+        }
+        var slider_ka = document.getElementById('light-ka');
+        slider_ka.addEventListener('change', function() {updateKa();});
+        var value_ka = document.getElementById('value-ka');
+        function updateKa() {
+            var ka = +(slider_ka.value);
+            value_ka.innerHTML = ka;
+            kAmbient = new Float32Array([ka, ka, ka, 1.0]);
+        }
+        var slider_kd = document.getElementById('light-kd');
+        slider_kd.addEventListener('change', function() {updateKd();});
+        var value_kd = document.getElementById('value-kd');
+        function updateKd() {
+            var kd = +(slider_kd.value);
+            value_kd.innerHTML = kd;
+            kDiffuse = new Float32Array([kd, kd, kd, 1.0]);
+        }
+        var slider_ks = document.getElementById('light-ks');
+        slider_ks.addEventListener('change', function() {updateKs();});
+        var value_ks = document.getElementById('value-ks');
+        function updateKs() {
+            var ks = +(slider_ks.value);
+            value_ks.innerHTML = ks;
+            kSpecular = new Float32Array([ks, ks, ks, 1.0]);
+        }
+
+        function switchLight1() {
+            if (on) {
+                on = false;
+            }else {
+                on = true;
+            }
+        }
+
+        // Position Light 2
+        var slider_light2_x = document.getElementById('light2-x');
+        var slider_light2_y = document.getElementById('light2-y');
+        var slider_light2_z = document.getElementById('light2-z');
+        slider_light2_x.addEventListener("change", function() {updateLight2Position_x();});
+        slider_light2_y.addEventListener("change", function() {updateLight2Position_y();});
+        slider_light2_z.addEventListener("change", function() {updateLight2Position_z();});
+        var value_light2_x = document.getElementById('value-light2-x');
+        var value_light2_y = document.getElementById('value-light2-y');
+        var value_light2_z = document.getElementById('value-light2-z');
+        function updateLight2Position_x() {
+            var x = +slider_light2_x.value;
+            value_light2_x.innerHTML = x;
+            var position = new Float32Array([x, y, z]);
+            lightPosition2[0] = x;
+        }
+        function updateLight2Position_y() {
+            var y = +slider_light2_y.value;
+            value_light2_y.innerHTML = y;
+            lightPosition2[1] = y;
+        }
+        function updateLight2Position_z() {
+            var z = +slider_light2_z.value;
+            value_light2_z.innerHTML = z;
+            lightPosition2[2] = z;
+        }
+        var slider_light2_r = document.getElementById('light2-r');
+        var slider_light2_g = document.getElementById('light2-g');
+        var slider_light2_b = document.getElementById('light2-b');
+        slider_light2_r.addEventListener("change", function() {updateLight2Color();});
+        slider_light2_g.addEventListener("change", function() {updateLight2Color();});
+        slider_light2_b.addEventListener("change", function() {updateLight2Color();});
+        var value_light2_r = document.getElementById('value-light2-r');
+        var value_light2_g = document.getElementById('value-light2-g');
+        var value_light2_b = document.getElementById('value-light2-b');
+        function updateLight2Color() {
+            var r = +(slider_light2_r.value / 255).toFixed(1);
+            var g = +(slider_light2_g.value / 255).toFixed(1);
+            var b = +(slider_light2_b.value / 255).toFixed(1);
+            value_light2_r.innerHTML = slider_light2_r.value ;
+            value_light2_g.innerHTML = slider_light2_g.value ;
+            value_light2_b.innerHTML = slider_light2_b.value ;
+            var color = new Float32Array([r, g, b]);
+            lightColor2 = color;
+        }
+        var slider_shininess2 = document.getElementById('light2-shininess');
+        slider_shininess2.addEventListener('change', function() {updateShininess2();});
+        var value_shininess2 = document.getElementById('value-shininess2');
+        function updateShininess2() {
+            var light2Shininess = +(slider_shininess2.value);
+            value_shininess2.innerHTML = light2Shininess;
+            shininess2 = light2Shininess;
+        }
+        var slider_ka2 = document.getElementById('light2-ka');
+        slider_ka2.addEventListener('change', function() {updateKa2();});
+        var value_ka2 = document.getElementById('value-ka2');
+        function updateKa2() {
+            var ka2 = +(slider_ka2.value);
+            value_ka2.innerHTML = ka2;
+            kAmbient2 = new Float32Array([ka2, ka2, ka2, 1.0]);
+        }
+        var slider_kd2 = document.getElementById('light2-kd');
+        slider_kd2.addEventListener('change', function() {updateKd2();});
+        var value_kd2 = document.getElementById('value-kd2');
+        function updateKd2() {
+            var kd2 = +(slider_kd2.value);
+            value_kd2.innerHTML = kd2;
+            kDiffuse2 = new Float32Array([kd2, kd2, kd2, 1.0]);
+        }
+        var slider_ks2 = document.getElementById('light2-ks');
+        slider_ks2.addEventListener('change', function() {updateKs2();});
+        var value_ks2 = document.getElementById('value-ks2');
+        function updateKs2() {
+            var ks2 = +(slider_ks2.value);
+            value_ks2.innerHTML = ks2;
+            kSpecular2 = new Float32Array([ks2, ks2, ks2, 1.0]);
+        }
+
+        function switchLight2() {
+            if (on2) {
+                on2 = false;
+            }else {
+                on2 = true;
+            }
+        }
+
+        // Position Light 3
+        var slider_light3_x = document.getElementById('light3-x');
+        var slider_light3_y = document.getElementById('light3-y');
+        var slider_light3_z = document.getElementById('light3-z');
+        slider_light3_x.addEventListener("change", function() {updateLight3Position_x();});
+        slider_light3_y.addEventListener("change", function() {updateLight3Position_y();});
+        slider_light3_z.addEventListener("change", function() {updateLight3Position_z();});
+        var value_light3_x = document.getElementById('value-light3-x');
+        var value_light3_y = document.getElementById('value-light3-y');
+        var value_light3_z = document.getElementById('value-light3-z');
+        function updateLight3Position_x() {
+            var x = +slider_light3_x.value;
+            value_light3_x.innerHTML = x;
+            lightPosition3[0] = x;
+        }
+        function updateLight3Position_y() {
+            var y = +slider_light3_y.value;
+            value_light3_y.innerHTML = y;
+            lightPosition3[1] = y;
+        }
+        function updateLight3Position_z() {
+            var z = +slider_light3_z.value;
+            value_light3_z.innerHTML = z;
+            lightPosition3[2] = z;
+        }
+        var slider_light3_r = document.getElementById('light3-r');
+        var slider_light3_g = document.getElementById('light3-g');
+        var slider_light3_b = document.getElementById('light3-b');
+        slider_light3_r.addEventListener("change", function() {updateLight3Color();});
+        slider_light3_g.addEventListener("change", function() {updateLight3Color();});
+        slider_light3_b.addEventListener("change", function() {updateLight3Color();});
+        var value_light3_r = document.getElementById('value-light3-r');
+        var value_light3_g = document.getElementById('value-light3-g');
+        var value_light3_b = document.getElementById('value-light3-b');
+        function updateLight3Color() {
+            var r = +(slider_light3_r.value / 255).toFixed(1);
+            var g = +(slider_light3_g.value / 255).toFixed(1);
+            var b = +(slider_light3_b.value / 255).toFixed(1);
+            value_light3_r.innerHTML = slider_light3_r.value ;
+            value_light3_g.innerHTML = slider_light3_g.value ;
+            value_light3_b.innerHTML = slider_light3_b.value ;
+            var color = new Float32Array([r, g, b]);
+            lightColor3 = color;
+        }
+        var slider_shininess3 = document.getElementById('light3-shininess');
+        slider_shininess3.addEventListener('change', function() {updateShininess3();});
+        var value_shininess3 = document.getElementById('value-shininess3');
+        function updateShininess3() {
+            var light3Shininess = +(slider_shininess3.value);
+            value_shininess3.innerHTML = light3Shininess;
+            shininess3 = light3Shininess;
+        }
+        var slider_ka3 = document.getElementById('light3-ka');
+        slider_ka3.addEventListener('change', function() {updateKa3();});
+        var value_ka3 = document.getElementById('value-ka3');
+        function updateKa3() {
+            var ka3 = +(slider_ka3.value);
+            value_ka3.innerHTML = ka3;
+            kAmbient3 = new Float32Array([ka3, ka3, ka3, 1.0]);
+        }
+        var slider_kd3 = document.getElementById('light3-kd');
+        slider_kd3.addEventListener('change', function() {updateKd3();});
+        var value_kd3 = document.getElementById('value-kd3');
+        function updateKd3() {
+            var kd3 = +(slider_kd3.value);
+            value_kd3.innerHTML = kd3;
+            kDiffuse3 = new Float32Array([kd3, kd3, kd3, 1.0]);
+        }
+        var slider_ks3 = document.getElementById('light3-ks');
+        slider_ks3.addEventListener('change', function() {updateKs3();});
+        var value_ks3 = document.getElementById('value-ks3');
+        function updateKs3() {
+            var ks3 = +(slider_ks3.value);
+            value_ks3.innerHTML = ks3;
+            kSpecular3 = new Float32Array([ks3, ks3, ks3, 1.0]);
+        }
+
+        function switchLight3() {
+            if (on3) {
+                on3 = false;
+            }else {
+                on3 = true;
+            }
+        }
+
+        // --Teapot Transformation-- //
+        // 1. Rotation //
+        function updateRotate(select) {
+            switch (select.value) {
+                case 'x':
+                    var x = new Float32Array([1, 0, 0]);
+                    rotateAxis = x;
+                    break;
+                case 'y':
+                    var y = new Float32Array([0, 1, 0]);
+                    rotateAxis = y;
+                    break;
+                case 'z':
+                    var z = new Float32Array([0, 0, 1]);
+                    rotateAxis = z;
+                    break;
+            }
+        }
+        // 2. Translation //
+        var slider_trans_x = document.getElementById('trans-x');
+        var slider_trans_y = document.getElementById('trans-y');
+        var slider_trans_z = document.getElementById('trans-z');
+        slider_trans_x.addEventListener("change", function() {updateTranslation_x();});
+        slider_trans_y.addEventListener("change", function() {updateTranslation_y();});
+        slider_trans_z.addEventListener("change", function() {updateTranslation_z();});
+        var value_trans_x = document.getElementById('value-trans-x');
+        var value_trans_y = document.getElementById('value-trans-y');
+        var value_trans_z = document.getElementById('value-trans-z');
+        function updateTranslation_x() {
+            var x = +slider_trans_x.value;
+            value_trans_x.innerHTML = x;
+            translation[0] = x;
+        }
+        function updateTranslation_y() {
+            var y = +slider_trans_y.value;
+            value_trans_y.innerHTML = y;
+            translation[1] = y;
+        }
+        function updateTranslation_z() {
+            var z = +slider_trans_z.value;
+            value_trans_z.innerHTML = z;
+            translation[2] = z;
+        }
+        // 3. Scaling //
+        var slider_scale = document.getElementById('scale');
+        slider_scale.addEventListener('change', function() {updateScale();});
+        var value_scale = document.getElementById('value-scale');
+        function updateScale() {
+            var s = +slider_scale.value;
+            value_scale.innerHTML = s;
+            scale = new Float32Array([s, s, s]);
+        }
+        // 4. Shear //
+        var slider_shear_x = document.getElementById('shear-x');
+        var slider_shear_y = document.getElementById('shear-y');
+        var slider_shear_z = document.getElementById('shear-z');
+        slider_shear_x.addEventListener("change", function() {updateShear_x();});
+        slider_shear_y.addEventListener("change", function() {updateShear_y();});
+        slider_shear_z.addEventListener("change", function() {updateShear_z();});
+        var value_shear_x = document.getElementById('value-shear-x');
+        var value_shear_y = document.getElementById('value-shear-y');
+        var value_shear_z = document.getElementById('value-shear-z');
+        function updateShear_x() {
+            var x = +slider_shear_x.value;
+            value_shear_x.innerHTML = x;
+            shearing[0] = x;
+        }
+        function updateShear_y() {
+            var y = +slider_shear_y.value;
+            value_shear_y.innerHTML = y;
+            shearing[1] = y;
+        }
+        function updateShear_z() {
+            var z = +slider_shear_z.value;
+            value_shear_z.innerHTML = z;
+            shearing[2] = z;
+        }
+        //======== Kangaroo Transformation =========//
+        // 1. Rotation //
+        function updateRotate2(select) {
+            switch (select.value) {
+                case 'x':
+                    var x = new Float32Array([1, 0, 0]);
+                    rotateAxis_kangaroo = x;
+                    break;
+                case 'y':
+                    var y = new Float32Array([0, 1, 0]);
+                    rotateAxis_kangaroo = y;
+                    break;
+                case 'z':
+                    var z = new Float32Array([0, 0, 1]);
+                    rotateAxis_kangaroo = z;
+                    break;
+            }
+        }
+        // 2. Translation //
+        var slider_trans2_x = document.getElementById('trans2-x');
+        var slider_trans2_y = document.getElementById('trans2-y');
+        var slider_trans2_z = document.getElementById('trans2-z');
+        slider_trans2_x.addEventListener("change", function() {updateTranslation2_x();});
+        slider_trans2_y.addEventListener("change", function() {updateTranslation2_y();});
+        slider_trans2_z.addEventListener("change", function() {updateTranslation2_z();});
+        var value_trans2_x = document.getElementById('value-trans2-x');
+        var value_trans2_y = document.getElementById('value-trans2-y');
+        var value_trans2_z = document.getElementById('value-trans2-z');
+        function updateTranslation2_x() {
+            var x = +slider_trans2_x.value;
+            value_trans2_x.innerHTML = x;
+            translation_kangaroo[0] = x;
+        }
+        function updateTranslation2_y() {
+            var y = +slider_trans2_y.value;
+            value_trans2_y.innerHTML = y;
+            translation_kangaroo[1] = y;
+        }
+        function updateTranslation2_z() {
+            var z = +slider_trans2_z.value;
+            value_trans2_z.innerHTML = z;
+            translation_kangaroo[2] = z;
+        }
+        // 3. Scaling //
+        var slider_scale2 = document.getElementById('scale2');
+        slider_scale2.addEventListener('change', function() {updateScale2();});
+        var value_scale2 = document.getElementById('value-scale2');
+        function updateScale2() {
+            var s = +slider_scale2.value;
+            value_scale2.innerHTML = s;
+            scale_kangaroo = new Float32Array([s, s, s]);
+        }
+        // 4. Shear //
+        var slider_shear2_x = document.getElementById('shear2-x');
+        var slider_shear2_y = document.getElementById('shear2-y');
+        var slider_shear2_z = document.getElementById('shear2-z');
+        slider_shear2_x.addEventListener("change", function() {updateShear2_x();});
+        slider_shear2_y.addEventListener("change", function() {updateShear2_y();});
+        slider_shear2_z.addEventListener("change", function() {updateShear2_z();});
+        var value_shear2_x = document.getElementById('value-shear2-x');
+        var value_shear2_y = document.getElementById('value-shear2-y');
+        var value_shear2_z = document.getElementById('value-shear2-z');
+        function updateShear2_x() {
+            var x = +slider_shear2_x.value;
+            value_shear2_x.innerHTML = x;
+            shearing_kangaroo[0] = x;
+        }
+        function updateShear2_y() {
+            var y = +slider_shear2_y.value;
+            value_shear2_y.innerHTML = y;
+            shearing_kangaroo[1] = y;
+        }
+        function updateShear2_z() {
+            var z = +slider_shear2_z.value;
+            value_shear2_z.innerHTML = z;
+            shearing_kangaroo[2] = z;
+        }
+        //======== Object Transformation =========//
+        // 1. Rotation //
+        function updateRotate3(select) {
+            switch (select.value) {
+                case 'x':
+                    var x = new Float32Array([1, 0, 0]);
+                    rotateAxis_obj = x;
+                    break;
+                case 'y':
+                    var y = new Float32Array([0, 1, 0]);
+                    rotateAxis_obj = y;
+                    break;
+                case 'z':
+                    var z = new Float32Array([0, 0, 1]);
+                    rotateAxis_obj = z;
+                    break;
+            }
+        }
+        // 2. Translation //
+        var slider_trans3_x = document.getElementById('trans3-x');
+        var slider_trans3_y = document.getElementById('trans3-y');
+        var slider_trans3_z = document.getElementById('trans3-z');
+        slider_trans3_x.addEventListener("change", function() {updateTranslation3_x();});
+        slider_trans3_y.addEventListener("change", function() {updateTranslation3_y();});
+        slider_trans3_z.addEventListener("change", function() {updateTranslation3_z();});
+        var value_trans3_x = document.getElementById('value-trans3-x');
+        var value_trans3_y = document.getElementById('value-trans3-y');
+        var value_trans3_z = document.getElementById('value-trans3-z');
+        function updateTranslation3_x() {
+            var x = +slider_trans3_x.value;
+            value_trans3_x.innerHTML = x;
+            translation_obj[0] = x;
+        }
+        function updateTranslation3_y() {
+            var y = +slider_trans3_y.value;
+            value_trans3_y.innerHTML = y;
+            translation_obj[1] = y;
+        }
+        function updateTranslation3_z() {
+            var z = +slider_trans3_z.value;
+            value_trans3_z.innerHTML = z;
+            translation_obj[2] = z;
+        }
+        // 3. Scaling //
+        var slider_scale3 = document.getElementById('scale3');
+        slider_scale3.addEventListener('change', function() {updateScale3();});
+        var value_scale3 = document.getElementById('value-scale3');
+        function updateScale3() {
+            var s = +slider_scale3.value;
+            value_scale3.innerHTML = s;
+            scale_obj = new Float32Array([s, s, s]);
+        }
+        // 4. Shear //
+        var slider_shear3_x = document.getElementById('shear3-x');
+        var slider_shear3_y = document.getElementById('shear3-y');
+        var slider_shear3_z = document.getElementById('shear3-z');
+        slider_shear3_x.addEventListener("change", function() {updateShear3_x();});
+        slider_shear3_y.addEventListener("change", function() {updateShear3_y();});
+        slider_shear3_z.addEventListener("change", function() {updateShear3_z();});
+        var value_shear3_x = document.getElementById('value-shear3-x');
+        var value_shear3_y = document.getElementById('value-shear3-y');
+        var value_shear3_z = document.getElementById('value-shear3-z');
+        function updateShear3_x() {
+            var x = +slider_shear3_x.value;
+            value_shear3_x.innerHTML = x;
+            shearing_obj[0] = x;
+        }
+        function updateShear3_y() {
+            var y = +slider_shear3_y.value;
+            value_shear3_y.innerHTML = y;
+            shearing_obj[1] = y;
+        }
+        function updateShear3_z() {
+            var z = +slider_shear3_z.value;
+            value_shear3_z.innerHTML = z;
+            shearing_obj[2] = z;
+        }
+        var canvas = document.getElementById("ICG-canvas");
+        canvas.addEventListener("click", function() {changePerspective();});
+        function changePerspective() {
+            if(perspective == 0) {
+                perspective = 1;
+                console.log("perspective 0");
+            }else {
+                perspective = 0;
+                console.log("perspective 1");
+            }
+        }
+    </script>
+</body>
+
+</html>
